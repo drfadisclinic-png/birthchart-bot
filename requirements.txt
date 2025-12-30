@@ -1,5 +1,5 @@
 python-telegram-bot==20.7
-hijridate==0.0.4
+hijridate==2.5.0
 pyswisseph==2.10.3
 pytz==2023.3
 timezonefinder==6.2.1
