@@ -1,4 +1,6 @@
-python-telegram-bot==20.7
+pyTelegramBotAPI==4.15.4
+Flask==3.0.0
+
 hijridate==2.5.0
 pyswisseph==2.10.3.2
 pytz==2024.1
