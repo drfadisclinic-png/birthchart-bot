@@ -33,9 +33,35 @@ user_states = {}
 # =====================
 # أدوات مساعدة
 # =====================
-gc = geonamescache.GeonamesCache(min_city_population=15000)
-tf = TimezoneFinder()
+gc = geonamescache.GeonamesCache()
 
+tf = TimezoneFinder()
+def find_city(city_name, country_name):
+    city_name = city_name.lower()
+    country_name = country_name.lower()
+
+    countries = gc.get_countries()
+    country_code = None
+
+    for code, c in countries.items():
+        if c["name"].lower() == country_name:
+            country_code = code
+            break
+
+    if not country_code:
+        raise ValueError("الدولة غير موجودة")
+
+    cities = [
+        c for c in gc.get_cities().values()
+        if c["countrycode"] == country_code
+        and c["name"].lower() == city_name
+    ]
+
+    if not cities:
+        raise ValueError("المدينة غير موجودة")
+
+    return sorted(cities, key=lambda x: x.get("population", 0), reverse=True)[0]
+    
 def convert_to_24(hour, ampm):
     hour = int(hour)
     if ampm.startswith("مس") and hour < 12:
@@ -69,16 +95,10 @@ def calculate_birth_chart(day, month, year, hour, minute, ampm, city, country):
     hour24 = convert_to_24(hour, ampm)
 
     # المدينة
-    cities = [
-        c for c in gc.get_cities().values()
-        if c["name"].lower() == city.lower()
-    ]
-    if not cities:
-        raise ValueError("لم يتم العثور على المدينة")
+   city_data = find_city(city, country)
+   lat = float(city_data["latitude"])
+   lon = float(city_data["longitude"])
 
-    city_data = sorted(cities, key=lambda x: x.get("population", 0), reverse=True)[0]
-    lat = float(city_data["latitude"])
-    lon = float(city_data["longitude"])
 
     tzname = tf.timezone_at(lat=lat, lng=lon) or "UTC"
     tz = pytz.timezone(tzname)
