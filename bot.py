@@ -36,7 +36,6 @@ chinese_ar = {
 # --- قاعدة بيانات المدن ---
 gc = geonamescache.GeonamesCache()
 countries_dict = gc.get_countries()
-country_names = [c['name'] for c in countries_dict.values()]
 country_code_by_name = {c['name']: code for code, c in countries_dict.items()}
 
 # --- دوال مساعدة ---
@@ -114,19 +113,14 @@ def calculate_for_bot(date_str, time_str, location_str):
         japanese_year = year - (2019 if japanese_era == "ريوا" else 1989 if japanese_era == "هيسي" else 1926) + 1
 
         result = f"""
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📍 الموقع: {city}, {country} | 🕓 المنطقة الزمنية: {timezone_name}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 📅 الميلادي: {day:02d}/{month:02d}/{year}
 🕌 الهجري: {hijri_date.day:02d}/{hijri_date.month:02d}/{hijri_date.year}
 🕒 الوقت: {hour:02d}:{minute:02d} {am_pm} ↦ {hour_24:02d}:{minute:02d} (24h)
-
 🔮 البرج الغربي: {western_ar_name} ({western_en})
 🐉 البرج الصيني: {chinese_ar_name} ({chinese_en})
 🌙 القمر في: {moon_sign_name}
 ⬆️ الطالع: {asc_sign_name}
-
 📆 العبري: يوم {hebrew_date[2]}, شهر {hebrew_date[1]}, سنة {hebrew_date[0]}
 📆 الهندي (Saka): يوم {indian_date[2]}, شهر {indian_date[1]}, سنة {indian_date[0]}
 📆 القبطي: يوم {coptic_date[2]}, شهر {coptic_date[1]}, سنة {coptic_date[0]}
