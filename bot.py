@@ -9,20 +9,20 @@ import geonamescache
 
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, filters,
+    Application, CommandHandler, MessageHandler, filters,
     ConversationHandler, ContextTypes
 )
 
-# --- إعدادات اللوج ---
+# --- Logging ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- الحالات ---
+# --- Conversation states ---
 DATE, TIME, LOCATION = range(3)
 
-# --- بيانات الأبراج ---
+# --- الأبراج ---
 zodiac_ar = {
     "Aries": "الحمل", "Taurus": "الثور", "Gemini": "الجوزاء", "Cancer": "السرطان",
     "Leo": "الأسد", "Virgo": "العذراء", "Libra": "الميزان", "Scorpio": "العقرب",
@@ -66,13 +66,12 @@ def get_location(city_name, country_name):
     if not code or not city_name:
         raise ValueError("يجب اختيار الدولة والمدينة من القوائم")
     candidates = [c for c in gc.get_cities().values()
-                  if c['countrycode'] == code and c['name'] == city_name]
+                  if c['countrycode'] == code and c['name'] == city_name and c.get('population',0)>=15000]
     if not candidates:
         raise ValueError("المدينة غير موجودة في قاعدة البيانات لهذه الدولة")
     c0 = sorted(candidates, key=lambda x: x.get('population', 0), reverse=True)[0]
     lat = float(c0['latitude'])
     lon = float(c0['longitude'])
-    # الأردن: حسم مباشر للمنطقة الزمنية
     if code == "JO":
         return lat, lon, "Asia/Amman"
     tf = TimezoneFinder()
@@ -82,7 +81,6 @@ def get_location(city_name, country_name):
 # --- دالة الحساب ---
 def calculate_for_bot(date_str, time_str, location_str):
     try:
-        # تحويل التاريخ
         day, month, year = map(int, date_str.split('/'))
         hour_min, am_pm = time_str.split()
         hour, minute = map(int, hour_min.split(':'))
@@ -94,13 +92,11 @@ def calculate_for_bot(date_str, time_str, location_str):
         dt_utc = dt_local.astimezone(pytz.utc)
         jd_ut = swe.julday(dt_utc.year, dt_utc.month, dt_utc.day, dt_utc.hour + dt_utc.minute / 60)
 
-        # الأبراج
         western_en = get_zodiac(day, month)
         chinese_en = get_chinese_zodiac(year)
         western_ar_name = zodiac_ar.get(western_en, western_en)
         chinese_ar_name = chinese_ar.get(chinese_en, chinese_en)
 
-        # القمر والطالع
         moon_longitude = swe.calc_ut(jd_ut, swe.MOON)[0][0]
         moon_sign = int(moon_longitude / 30)
         moon_sign_name = list(zodiac_ar.values())[moon_sign]
@@ -110,7 +106,6 @@ def calculate_for_bot(date_str, time_str, location_str):
         asc_sign = int(ascendant_deg / 30)
         asc_sign_name = list(zodiac_ar.values())[asc_sign]
 
-        # تقاويم إضافية
         hijri_date = Gregorian(year, month, day).to_hijri()
         hebrew_date = hebrew.from_gregorian(year, month, day)
         indian_date = indian_civil.from_gregorian(year, month, day)
@@ -119,7 +114,6 @@ def calculate_for_bot(date_str, time_str, location_str):
         japanese_era = "ريوا" if year >= 2019 else "هيسي" if year >= 1989 else "شووا"
         japanese_year = year - (2019 if japanese_era == "ريوا" else 1989 if japanese_era == "هيسي" else 1926) + 1
 
-        # إخراج النتائج
         result = f"""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📍 الموقع: {city}, {country} | 🕓 المنطقة الزمنية: {timezone_name}
@@ -144,7 +138,7 @@ def calculate_for_bot(date_str, time_str, location_str):
     except Exception as e:
         return f"حدث خطأ أثناء الحساب: {str(e)}"
 
-# --- handlers ---
+# --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("مرحبًا! أرسل تاريخ ميلادك بالصيغة: يوم/شهر/سنة")
     return DATE
@@ -176,7 +170,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Main ---
 if __name__ == "__main__":
     import os
-    TOKEN = os.getenv("BOT_TOKEN")  # ضع توكن البوت هنا في متغير البيئة على Render
+    TOKEN = os.getenv("BOT_TOKEN")
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
@@ -188,6 +182,6 @@ if __name__ == "__main__":
         fallbacks=[CommandHandler('cancel', cancel)]
     )
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).build()
     app.add_handler(conv_handler)
     app.run_polling()
