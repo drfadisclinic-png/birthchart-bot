@@ -20,22 +20,55 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN غير موجود في Environment Variables")
+    raise RuntimeError("BOT_TOKEN غير موجود")
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="Markdown")
 app = Flask(__name__)
 
 # =====================
-# تخزين حالة المستخدم
+# حالة المستخدم
 # =====================
 user_states = {}
 
 # =====================
-# أدوات مساعدة
+# أدوات
 # =====================
 gc = geonamescache.GeonamesCache()
-
 tf = TimezoneFinder()
+
+def convert_to_24(hour, ampm):
+    hour = int(hour)
+    if ampm.startswith("مس") and hour < 12:
+        return hour + 12
+    if ampm.startswith("ص") and hour == 12:
+        return 0
+    return hour
+
+def get_zodiac(day, month):
+    signs = [
+        ("Capricorn", 20), ("Aquarius", 19), ("Pisces", 20),
+        ("Aries", 20), ("Taurus", 21), ("Gemini", 21),
+        ("Cancer", 22), ("Leo", 23), ("Virgo", 23),
+        ("Libra", 23), ("Scorpio", 23), ("Sagittarius", 22),
+        ("Capricorn", 31)
+    ]
+    return signs[month][0] if day >= signs[month - 1][1] else signs[month - 1][0]
+
+zodiac_ar = {
+    "Aries": "الحمل",
+    "Taurus": "الثور",
+    "Gemini": "الجوزاء",
+    "Cancer": "السرطان",
+    "Leo": "الأسد",
+    "Virgo": "العذراء",
+    "Libra": "الميزان",
+    "Scorpio": "العقرب",
+    "Sagittarius": "القوس",
+    "Capricorn": "الجدي",
+    "Aquarius": "الدلو",
+    "Pisces": "الحوت",
+}
+
 def find_city(city_name, country_name):
     city_name = city_name.lower()
     country_name = country_name.lower()
@@ -61,44 +94,16 @@ def find_city(city_name, country_name):
         raise ValueError("المدينة غير موجودة")
 
     return sorted(cities, key=lambda x: x.get("population", 0), reverse=True)[0]
-    
-def convert_to_24(hour, ampm):
-    hour = int(hour)
-    if ampm.startswith("مس") and hour < 12:
-        return hour + 12
-    if ampm.startswith("ص") and hour == 12:
-        return 0
-    return hour
-
-def get_zodiac(day, month):
-    signs = [
-        ("Capricorn", 20), ("Aquarius", 19), ("Pisces", 20),
-        ("Aries", 20), ("Taurus", 21), ("Gemini", 21),
-        ("Cancer", 22), ("Leo", 23), ("Virgo", 23),
-        ("Libra", 23), ("Scorpio", 23), ("Sagittarius", 22),
-        ("Capricorn", 31)
-    ]
-    return signs[month][0] if day >= signs[month - 1][1] else signs[month - 1][0]
-
-zodiac_ar = {
-    "Aries": "الحمل", "Taurus": "الثور", "Gemini": "الجوزاء",
-    "Cancer": "السرطان", "Leo": "الأسد", "Virgo": "العذراء",
-    "Libra": "الميزان", "Scorpio": "العقرب",
-    "Sagittarius": "القوس", "Capricorn": "الجدي",
-    "Aquarius": "الدلو", "Pisces": "الحوت"
-}
 
 # =====================
-# الحساب الكامل
+# الحساب
 # =====================
 def calculate_birth_chart(day, month, year, hour, minute, ampm, city, country):
     hour24 = convert_to_24(hour, ampm)
 
-    # المدينة
-   city_data = find_city(city, country)
-   lat = float(city_data["latitude"])
-   lon = float(city_data["longitude"])
-
+    city_data = find_city(city, country)
+    lat = float(city_data["latitude"])
+    lon = float(city_data["longitude"])
 
     tzname = tf.timezone_at(lat=lat, lng=lon) or "UTC"
     tz = pytz.timezone(tzname)
@@ -113,47 +118,45 @@ def calculate_birth_chart(day, month, year, hour, minute, ampm, city, country):
         dt_utc.hour + dt_utc.minute / 60
     )
 
-    # الأبراج
-    western = zodiac_ar[get_zodiac(day, month)]
+    sun = zodiac_ar[get_zodiac(day, month)]
 
     moon_lon = swe.calc_ut(jd, swe.MOON)[0][0]
-    moon_sign = list(zodiac_ar.values())[int(moon_lon / 30)]
+    moon = list(zodiac_ar.values())[int(moon_lon / 30)]
 
     houses = swe.houses(jd, lat, lon)[0]
-    asc_sign = list(zodiac_ar.values())[int(houses[0] / 30)]
+    asc = list(zodiac_ar.values())[int(houses[0] / 30)]
 
     hijri = Gregorian(year, month, day).to_hijri()
 
     return f"""
 ━━━━━━━━━━━━━━━━━━
-🌟 *نتيجة الحساب الفلكي*
+🌟 *النتيجة الفلكية*
 ━━━━━━━━━━━━━━━━━━
+📍 {city}, {country}
+🕓 {tzname}
 
-📍 *المكان:* {city}, {country}
-🕓 *المنطقة الزمنية:* {tzname}
+📅 {day:02d}/{month:02d}/{year}
+🕌 {hijri.day}/{hijri.month}/{hijri.year}
 
-📅 *الميلادي:* {day:02d}/{month:02d}/{year}
-🕌 *الهجري:* {hijri.day}/{hijri.month}/{hijri.year}
-
-☀️ *البرج الشمسي:* {western}
-🌙 *القمر:* {moon_sign}
-⬆️ *الطالع:* {asc_sign}
+☀️ البرج: {sun}
+🌙 القمر: {moon}
+⬆️ الطالع: {asc}
 ━━━━━━━━━━━━━━━━━━
 """
 
 # =====================
-# أوامر البوت
+# البوت
 # =====================
 @bot.message_handler(commands=["start"])
 def start(message):
     user_states[message.from_user.id] = {"step": 1, "data": {}}
-    bot.send_message(message.chat.id, "👋 *مرحباً*\nأرسل اسمك:")
+    bot.send_message(message.chat.id, "👋 أرسل اسمك")
 
 @bot.message_handler(func=lambda m: True)
 def handler(message):
     uid = message.from_user.id
     if uid not in user_states:
-        bot.reply_to(message, "استخدم /start أولاً")
+        bot.reply_to(message, "استخدم /start")
         return
 
     state = user_states[uid]
@@ -162,25 +165,19 @@ def handler(message):
     if state["step"] == 1:
         state["data"]["name"] = text
         state["step"] = 2
-        bot.reply_to(message, "📅 أرسل تاريخ الميلاد:\n`15/5/1990`")
+        bot.reply_to(message, "📅 15/5/1990")
 
     elif state["step"] == 2:
-        try:
-            d, m, y = map(int, text.split("/"))
-            state["data"]["date"] = (d, m, y)
-            state["step"] = 3
-            bot.reply_to(message, "🕐 الوقت:\n`14 30 مساءً`")
-        except:
-            bot.reply_to(message, "❌ الصيغة خطأ")
+        d, m, y = map(int, text.split("/"))
+        state["data"]["date"] = (d, m, y)
+        state["step"] = 3
+        bot.reply_to(message, "🕐 14 30 مساءً")
 
     elif state["step"] == 3:
-        try:
-            h, m, ampm = text.split()
-            state["data"]["time"] = (int(h), int(m), ampm)
-            state["step"] = 4
-            bot.reply_to(message, "📍 المكان:\n`Amman Jordan`")
-        except:
-            bot.reply_to(message, "❌ الصيغة خطأ")
+        h, m, ap = text.split()
+        state["data"]["time"] = (int(h), int(m), ap)
+        state["step"] = 4
+        bot.reply_to(message, "📍 Amman Jordan")
 
     elif state["step"] == 4:
         city, country = text.split(" ", 1)
@@ -194,15 +191,15 @@ def handler(message):
 
         bot.send_message(message.chat.id, result)
         del user_states[uid]
-        bot.send_message(message.chat.id, "🔄 /start لحساب جديد")
+        bot.send_message(message.chat.id, "🔄 /start")
 
 # =====================
-# Webhook (Render)
+# Webhook
 # =====================
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
     update = telebot.types.Update.de_json(
-        request.stream.read().decode("utf-8")
+        request.get_data().decode("utf-8")
     )
     bot.process_new_updates([update])
     return "OK", 200
@@ -212,9 +209,9 @@ def index():
     return "Bot is running"
 
 # =====================
-# تشغيل السيرفر
+# تشغيل
 # =====================
 if __name__ == "__main__":
-    logger.info("🤖 Bot started (Webhook mode)")
+    logger.info("Bot started")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
