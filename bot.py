@@ -1,217 +1,193 @@
-import os
 import logging
 from datetime import datetime
-
-import telebot
-from flask import Flask, request
-
 import pytz
-import swisseph as swe
 from hijridate import Gregorian
+import swisseph as swe
 from timezonefinder import TimezoneFinder
 from convertdate import hebrew, indian_civil, coptic
 import geonamescache
 
-# =====================
-# إعدادات أساسية
-# =====================
-logging.basicConfig(level=logging.INFO)
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler, filters,
+    ConversationHandler, ContextTypes
+)
+
+# --- إعدادات اللوج ---
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN غير موجود")
+# --- الحالات ---
+DATE, TIME, LOCATION = range(3)
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="Markdown")
-app = Flask(__name__)
+# --- بيانات الأبراج ---
+zodiac_ar = {
+    "Aries": "الحمل", "Taurus": "الثور", "Gemini": "الجوزاء", "Cancer": "السرطان",
+    "Leo": "الأسد", "Virgo": "العذراء", "Libra": "الميزان", "Scorpio": "العقرب",
+    "Sagittarius": "القوس", "Capricorn": "الجدي", "Aquarius": "الدلو", "Pisces": "الحوت"
+}
+chinese_ar = {
+    "Rat": "الفأر", "Ox": "الثور", "Tiger": "النمر", "Rabbit": "الأرنب",
+    "Dragon": "التنين", "Snake": "الثعبان", "Horse": "الحصان", "Goat": "العنزة",
+    "Monkey": "القرد", "Rooster": "الديك", "Dog": "الكلب", "Pig": "الخنزير"
+}
 
-# =====================
-# حالة المستخدم
-# =====================
-user_states = {}
+# --- قاعدة بيانات المدن ---
+gc = geonamescache.GeonamesCache(min_city_population=15000)
+countries_dict = gc.get_countries()
+country_names = [c['name'] for c in countries_dict.values()]
+country_code_by_name = {c['name']: code for code, c in countries_dict.items()}
 
-# =====================
-# أدوات
-# =====================
-gc = geonamescache.GeonamesCache()
-tf = TimezoneFinder()
-
-def convert_to_24(hour, ampm):
+# --- دوال مساعدة ---
+def convert_to_24_hour(hour, am_pm):
     hour = int(hour)
-    if ampm.startswith("مس") and hour < 12:
+    if am_pm == "مساءً" and hour < 12:
         return hour + 12
-    if ampm.startswith("ص") and hour == 12:
+    elif am_pm == "صباحًا" and hour == 12:
         return 0
     return hour
 
 def get_zodiac(day, month):
-    signs = [
-        ("Capricorn", 20), ("Aquarius", 19), ("Pisces", 20),
-        ("Aries", 20), ("Taurus", 21), ("Gemini", 21),
-        ("Cancer", 22), ("Leo", 23), ("Virgo", 23),
-        ("Libra", 23), ("Scorpio", 23), ("Sagittarius", 22),
-        ("Capricorn", 31)
+    zodiac_signs = [
+        ("Capricorn", 20), ("Aquarius", 19), ("Pisces", 20), ("Aries", 20),
+        ("Taurus", 21), ("Gemini", 21), ("Cancer", 22), ("Leo", 23),
+        ("Virgo", 23), ("Libra", 23), ("Scorpio", 23), ("Sagittarius", 22), ("Capricorn", 31)
     ]
-    return signs[month][0] if day >= signs[month - 1][1] else signs[month - 1][0]
+    return zodiac_signs[month][0] if day >= zodiac_signs[month - 1][1] else zodiac_signs[month - 1][0]
 
-zodiac_ar = {
-    "Aries": "الحمل",
-    "Taurus": "الثور",
-    "Gemini": "الجوزاء",
-    "Cancer": "السرطان",
-    "Leo": "الأسد",
-    "Virgo": "العذراء",
-    "Libra": "الميزان",
-    "Scorpio": "العقرب",
-    "Sagittarius": "القوس",
-    "Capricorn": "الجدي",
-    "Aquarius": "الدلو",
-    "Pisces": "الحوت",
-}
+def get_chinese_zodiac(year):
+    animals = ["Rat", "Ox", "Tiger", "Rabbit", "Dragon", "Snake", "Horse", "Goat", "Monkey", "Rooster", "Dog", "Pig"]
+    return animals[year % 12]
 
-def find_city(city_name, country_name):
-    city_name = city_name.lower()
-    country_name = country_name.lower()
-
-    countries = gc.get_countries()
-    country_code = None
-
-    for code, c in countries.items():
-        if c["name"].lower() == country_name:
-            country_code = code
-            break
-
-    if not country_code:
-        raise ValueError("الدولة غير موجودة")
-
-    cities = [
-        c for c in gc.get_cities().values()
-        if c["countrycode"] == country_code
-        and c["name"].lower() == city_name
-    ]
-
-    if not cities:
-        raise ValueError("المدينة غير موجودة")
-
-    return sorted(cities, key=lambda x: x.get("population", 0), reverse=True)[0]
-
-# =====================
-# الحساب
-# =====================
-def calculate_birth_chart(day, month, year, hour, minute, ampm, city, country):
-    hour24 = convert_to_24(hour, ampm)
-
-    city_data = find_city(city, country)
-    lat = float(city_data["latitude"])
-    lon = float(city_data["longitude"])
-
+def get_location(city_name, country_name):
+    code = country_code_by_name.get(country_name or "")
+    if not code or not city_name:
+        raise ValueError("يجب اختيار الدولة والمدينة من القوائم")
+    candidates = [c for c in gc.get_cities().values()
+                  if c['countrycode'] == code and c['name'] == city_name]
+    if not candidates:
+        raise ValueError("المدينة غير موجودة في قاعدة البيانات لهذه الدولة")
+    c0 = sorted(candidates, key=lambda x: x.get('population', 0), reverse=True)[0]
+    lat = float(c0['latitude'])
+    lon = float(c0['longitude'])
+    # الأردن: حسم مباشر للمنطقة الزمنية
+    if code == "JO":
+        return lat, lon, "Asia/Amman"
+    tf = TimezoneFinder()
     tzname = tf.timezone_at(lat=lat, lng=lon) or "UTC"
-    tz = pytz.timezone(tzname)
+    return lat, lon, tzname
 
-    dt_local = tz.localize(datetime(year, month, day, hour24, minute))
-    dt_utc = dt_local.astimezone(pytz.utc)
+# --- دالة الحساب ---
+def calculate_for_bot(date_str, time_str, location_str):
+    try:
+        # تحويل التاريخ
+        day, month, year = map(int, date_str.split('/'))
+        hour_min, am_pm = time_str.split()
+        hour, minute = map(int, hour_min.split(':'))
+        hour_24 = convert_to_24_hour(hour, am_pm)
+        country, city = map(str.strip, location_str.split(','))
+        lat, lon, timezone_name = get_location(city, country)
+        tz = pytz.timezone(timezone_name)
+        dt_local = tz.localize(datetime(year, month, day, hour_24, minute))
+        dt_utc = dt_local.astimezone(pytz.utc)
+        jd_ut = swe.julday(dt_utc.year, dt_utc.month, dt_utc.day, dt_utc.hour + dt_utc.minute / 60)
 
-    jd = swe.julday(
-        dt_utc.year,
-        dt_utc.month,
-        dt_utc.day,
-        dt_utc.hour + dt_utc.minute / 60
-    )
+        # الأبراج
+        western_en = get_zodiac(day, month)
+        chinese_en = get_chinese_zodiac(year)
+        western_ar_name = zodiac_ar.get(western_en, western_en)
+        chinese_ar_name = chinese_ar.get(chinese_en, chinese_en)
 
-    sun = zodiac_ar[get_zodiac(day, month)]
+        # القمر والطالع
+        moon_longitude = swe.calc_ut(jd_ut, swe.MOON)[0][0]
+        moon_sign = int(moon_longitude / 30)
+        moon_sign_name = list(zodiac_ar.values())[moon_sign]
 
-    moon_lon = swe.calc_ut(jd, swe.MOON)[0][0]
-    moon = list(zodiac_ar.values())[int(moon_lon / 30)]
+        houses = swe.houses(jd_ut, lat, lon)[0]
+        ascendant_deg = houses[0]
+        asc_sign = int(ascendant_deg / 30)
+        asc_sign_name = list(zodiac_ar.values())[asc_sign]
 
-    houses = swe.houses(jd, lat, lon)[0]
-    asc = list(zodiac_ar.values())[int(houses[0] / 30)]
+        # تقاويم إضافية
+        hijri_date = Gregorian(year, month, day).to_hijri()
+        hebrew_date = hebrew.from_gregorian(year, month, day)
+        indian_date = indian_civil.from_gregorian(year, month, day)
+        coptic_date = coptic.from_gregorian(year, month, day)
+        buddhist_year = year + 543
+        japanese_era = "ريوا" if year >= 2019 else "هيسي" if year >= 1989 else "شووا"
+        japanese_year = year - (2019 if japanese_era == "ريوا" else 1989 if japanese_era == "هيسي" else 1926) + 1
 
-    hijri = Gregorian(year, month, day).to_hijri()
+        # إخراج النتائج
+        result = f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 الموقع: {city}, {country} | 🕓 المنطقة الزمنية: {timezone_name}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    return f"""
-━━━━━━━━━━━━━━━━━━
-🌟 *النتيجة الفلكية*
-━━━━━━━━━━━━━━━━━━
-📍 {city}, {country}
-🕓 {tzname}
+📅 الميلادي: {day:02d}/{month:02d}/{year}
+🕌 الهجري: {hijri_date.day:02d}/{hijri_date.month:02d}/{hijri_date.year}
+🕒 الوقت: {hour:02d}:{minute:02d} {am_pm} ↦ {hour_24:02d}:{minute:02d} (24h)
 
-📅 {day:02d}/{month:02d}/{year}
-🕌 {hijri.day}/{hijri.month}/{hijri.year}
+🔮 البرج الغربي: {western_ar_name} ({western_en})
+🐉 البرج الصيني: {chinese_ar_name} ({chinese_en})
+🌙 القمر في: {moon_sign_name}
+⬆️ الطالع: {asc_sign_name}
 
-☀️ البرج: {sun}
-🌙 القمر: {moon}
-⬆️ الطالع: {asc}
-━━━━━━━━━━━━━━━━━━
+📆 العبري: يوم {hebrew_date[2]}, شهر {hebrew_date[1]}, سنة {hebrew_date[0]}
+📆 الهندي (Saka): يوم {indian_date[2]}, شهر {indian_date[1]}, سنة {indian_date[0]}
+📆 القبطي: يوم {coptic_date[2]}, شهر {coptic_date[1]}, سنة {coptic_date[0]}
+📆 البوذي: سنة {buddhist_year}
+📆 الياباني: عصر {japanese_era}، سنة {japanese_year}
 """
+        return result
+    except Exception as e:
+        return f"حدث خطأ أثناء الحساب: {str(e)}"
 
-# =====================
-# البوت
-# =====================
-@bot.message_handler(commands=["start"])
-def start(message):
-    user_states[message.from_user.id] = {"step": 1, "data": {}}
-    bot.send_message(message.chat.id, "👋 أرسل اسمك")
+# --- handlers ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("مرحبًا! أرسل تاريخ ميلادك بالصيغة: يوم/شهر/سنة")
+    return DATE
 
-@bot.message_handler(func=lambda m: True)
-def handler(message):
-    uid = message.from_user.id
-    if uid not in user_states:
-        bot.reply_to(message, "استخدم /start")
-        return
+async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['date'] = update.message.text
+    await update.message.reply_text("أرسل الوقت: ساعة:دقيقة صباحًا/مساءً مثلا 07:30 صباحًا")
+    return TIME
 
-    state = user_states[uid]
-    text = message.text.strip()
+async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['time'] = update.message.text
+    await update.message.reply_text("أرسل الدولة والمدينة مثلا: الأردن, عمان")
+    return LOCATION
 
-    if state["step"] == 1:
-        state["data"]["name"] = text
-        state["step"] = 2
-        bot.reply_to(message, "📅 15/5/1990")
-
-    elif state["step"] == 2:
-        d, m, y = map(int, text.split("/"))
-        state["data"]["date"] = (d, m, y)
-        state["step"] = 3
-        bot.reply_to(message, "🕐 14 30 مساءً")
-
-    elif state["step"] == 3:
-        h, m, ap = text.split()
-        state["data"]["time"] = (int(h), int(m), ap)
-        state["step"] = 4
-        bot.reply_to(message, "📍 Amman Jordan")
-
-    elif state["step"] == 4:
-        city, country = text.split(" ", 1)
-        d = state["data"]
-
-        result = calculate_birth_chart(
-            d["date"][0], d["date"][1], d["date"][2],
-            d["time"][0], d["time"][1], d["time"][2],
-            city, country
-        )
-
-        bot.send_message(message.chat.id, result)
-        del user_states[uid]
-        bot.send_message(message.chat.id, "🔄 /start")
-
-# =====================
-# Webhook
-# =====================
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    update = telebot.types.Update.de_json(
-        request.get_data().decode("utf-8")
+async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['location'] = update.message.text
+    result = calculate_for_bot(
+        context.user_data['date'],
+        context.user_data['time'],
+        context.user_data['location']
     )
-    bot.process_new_updates([update])
-    return "OK", 200
+    await update.message.reply_text(result)
+    return ConversationHandler.END
 
-@app.route("/")
-def index():
-    return "Bot is running"
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("تم الإلغاء")
+    return ConversationHandler.END
 
-# =====================
-# تشغيل
-# =====================
+# --- Main ---
 if __name__ == "__main__":
-    logger.info("Bot started")
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    import os
+    TOKEN = os.getenv("BOT_TOKEN")  # ضع توكن البوت هنا في متغير البيئة على Render
+
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date)],
+            TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_time)],
+            LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_location)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(conv_handler)
+    app.run_polling()
