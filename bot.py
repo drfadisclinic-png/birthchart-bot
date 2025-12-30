@@ -35,7 +35,7 @@ chinese_ar = {
 }
 
 # --- قاعدة بيانات المدن ---
-gc = geonamescache.GeonamesCache(min_city_population=15000)
+gc = geonamescache.GeonamesCache()
 countries_dict = gc.get_countries()
 country_names = [c['name'] for c in countries_dict.values()]
 country_code_by_name = {c['name']: code for code, c in countries_dict.items()}
